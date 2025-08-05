@@ -5,7 +5,23 @@ import torch
 import cv2
 import os
 import csv
+import sys
+import shutil
+import pytesseract
 
+
+# --- Error handling ---
+if not os.path.exists('runs/detect/train/weights/best.pt'):
+    print("❌ Error: best.pt model not found! Please train the model first.")
+    sys.exit(1)
+
+if shutil.which("tesseract") is None:
+    print("❌ Error: Tesseract-OCR not found. Please install it and add to system path.")
+    sys.exit(1)
+
+if not os.path.exists(file_path) and file_path != "webcam":
+    print(f"❌ Error: Input path '{file_path}' not found.")
+    sys.exit(1)
 
 CONFIDENCE_THRESHOLD = 0.4
 COLOR = (0, 255, 0)
@@ -82,20 +98,22 @@ def recognize_number_plates(image_or_path, reader,
     # if the image is a path, load the image; otherwise, use the image
     image = cv2.imread(image_or_path) if isinstance(image_or_path, str)\
                                       else image_or_path
+     gray = cv2.cvtColor(np_image, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     for i, box in enumerate(number_plate_list):
         # crop the number plate region
         np_image = image[box[0][1]:box[0][3], box[0][0]:box[0][2]]
 
         # detect the text from the license plate using the EasyOCR reader
-        detection = reader.readtext(np_image, paragraph=True)
+        detection = reader.readtext(thresh, paragraph=True)
 
-        if len(detection) == 0:
-            # if no text is detected, set the `text` variable to an empty string
-            text = ""
+         if len(detection) == 0:
+            # fallback to pytesseract if EasyOCR fails
+            text = pytesseract.image_to_string(thresh, config='--psm 7').strip()
         else:
-            # set the `text` variable to the detected text
             text = str(detection[0][1])
+
 
         # update the `number_plate_list` list, adding the detected text
         number_plate_list[i].append(text)
@@ -135,6 +153,32 @@ if __name__ == "__main__":
     file_path = "datasets/images/test/0fc216ca-131.jpg"
     # Extract the file name and the file extension from the file path
     _, file_extension = os.path.splitext(file_path)
+     elif file_path == "webcam":
+        print("Processing webcam input...")
+        cap = cv2.VideoCapture(0)
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("❌ Failed to grab frame from webcam.")
+                break
+
+            number_plate_list = detect_number_plates(frame, model)
+
+            if number_plate_list != []:
+                number_plate_list = recognize_number_plates(frame, reader, number_plate_list)
+
+                for box, text in number_plate_list:
+                    cv2.putText(frame, text, (box[0], box[3] + 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.75, COLOR, 2)
+
+            cv2.imshow("Webcam", frame)
+            if cv2.waitKey(10) == ord("q"):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
 
     # Check the file extension
     if file_extension in ['.jpg', '.jpeg', '.png']:
