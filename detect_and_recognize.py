@@ -5,7 +5,6 @@ import torch
 import cv2
 import os
 import csv
-import sys
 import shutil
 import pytesseract
 
@@ -17,10 +16,6 @@ if not os.path.exists('runs/detect/train/weights/best.pt'):
 
 if shutil.which("tesseract") is None:
     print("❌ Error: Tesseract-OCR not found. Please install it and add to system path.")
-    sys.exit(1)
-
-if not os.path.exists(file_path) and file_path != "webcam":
-    print(f"❌ Error: Input path '{file_path}' not found.")
     sys.exit(1)
 
 CONFIDENCE_THRESHOLD = 0.4
