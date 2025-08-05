@@ -86,33 +86,26 @@ def detect_number_plates(image, model, display=False):
         return []
 
 
-def recognize_number_plates(image_or_path, reader,
-                            number_plate_list, write_to_csv=False):
-
+def recognize_number_plates(image_or_path, reader, number_plate_list, write_to_csv=False):
     start = time.time()
-    # if the image is a path, load the image; otherwise, use the image
-    image = cv2.imread(image_or_path) if isinstance(image_or_path, str)\
-                                      else image_or_path
-     
-       for i, box in enumerate(number_plate_list):
-        # crop the number plate region
+
+    image = cv2.imread(image_or_path) if isinstance(image_or_path, str) else image_or_path
+
+    for i, box in enumerate(number_plate_list):
         np_image = image[box[0][1]:box[0][3], box[0][0]:box[0][2]]
 
         gray = cv2.cvtColor(np_image, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # detect the text from the license plate using the EasyOCR reader
         detection = reader.readtext(thresh, paragraph=True)
 
-         if len(detection) == 0:
-            # fallback to pytesseract if EasyOCR fails
+        if len(detection) == 0:
             text = pytesseract.image_to_string(thresh, config='--psm 7').strip()
         else:
             text = str(detection[0][1])
 
-
-        # update the `number_plate_list` list, adding the detected text
         number_plate_list[i].append(text)
+
 
     if write_to_csv:
         # open the CSV file
