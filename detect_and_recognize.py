@@ -93,12 +93,13 @@ def recognize_number_plates(image_or_path, reader,
     # if the image is a path, load the image; otherwise, use the image
     image = cv2.imread(image_or_path) if isinstance(image_or_path, str)\
                                       else image_or_path
-     gray = cv2.cvtColor(np_image, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    for i, box in enumerate(number_plate_list):
+     
+       for i, box in enumerate(number_plate_list):
         # crop the number plate region
         np_image = image[box[0][1]:box[0][3], box[0][0]:box[0][2]]
+
+        gray = cv2.cvtColor(np_image, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         # detect the text from the license plate using the EasyOCR reader
         detection = reader.readtext(thresh, paragraph=True)
