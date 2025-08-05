@@ -147,8 +147,7 @@ if __name__ == "__main__":
     # path to an image or a video file
     file_path = "datasets/images/test/0fc216ca-131.jpg"
     # Extract the file name and the file extension from the file path
-    _, file_extension = os.path.splitext(file_path)
-     elif file_path == "webcam":
+    if file_path == "webcam":
         print("Processing webcam input...")
         cap = cv2.VideoCapture(0)
 
