@@ -13,32 +13,16 @@ reader = Reader(['en'], gpu=True)
 
 st.title("🔍 Number Plate Detection and Recognition")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload Image or Video", type=["jpg", "jpeg", "png", "mp4", "avi", "mov", "mkv"])
-use_webcam = st.checkbox("Use Webcam Instead")
+# File uploader (images only)
+uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
 
-if uploaded_file or use_webcam:
-    if use_webcam:
-        st.warning("⚠️ Webcam support in Streamlit is experimental. Try uploading instead.")
-        cap = cv2.VideoCapture(0)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            st.error("Failed to capture webcam image.")
-        else:
-            image = frame
-    else:
-        # Save to temp file
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded_file.read())
-        tfile.close()
+if uploaded_file:
+    # Save to temp file
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
+    tfile.close()
 
-        if uploaded_file.type.startswith('image'):
-            image = cv2.imread(tfile.name)
-        else:
-            st.video(tfile.name)
-            st.info("📹 Video preview only. Run video processing in script mode.")
-            st.stop()
+    image = cv2.imread(tfile.name)
 
     # Run detection
     with st.spinner("Detecting number plates..."):
@@ -59,3 +43,4 @@ if uploaded_file or use_webcam:
         st.success(f"✅ Detected {len(plates)} plate(s).")
     else:
         st.warning("No number plates detected.")
+
