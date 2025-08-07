@@ -1,6 +1,9 @@
-names:
-- number plate
-path: ../datasets
-test: images/test
-train: images/train
-val: images/valid
+# YOLOv8 dataset configuration for license plate detection
+
+train: ../datasets/train/images
+val: ../datasets/valid/images
+test: ../datasets/test/images
+
+nc: 1  # number of classes
+names: ['number plate']
+
