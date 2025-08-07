@@ -1,9 +1,7 @@
-# YOLOv8 dataset configuration for license plate detection
+train: /home/kishore/Downloads/number-plate-recognition-main/datasets/train/images
+val: /home/kishore/Downloads/number-plate-recognition-main/datasets/valid/images
+test: /home/kishore/Downloads/number-plate-recognition-main/datasets/test/images
 
-train: ../datasets/train/images
-val: ../datasets/valid/images
-test: ../datasets/test/images
-
-nc: 1  # number of classes
-names: ['number plate']
+nc: 1
+names: ['License_Plate']
 
