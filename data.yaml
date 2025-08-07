@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['License_Plate']
+
+roboflow:
+  workspace: tummapudi-sasidhar-ehdqg
+  project: license-plate-recognition-rxg4e-urqlm
+  version: 2
+  license: CC BY 4.0
+  url: https://app.roboflow.com/tummapudi-sasidhar-ehdqg/license-plate-recognition-rxg4e-urqlm/2
