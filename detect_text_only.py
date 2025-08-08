@@ -5,35 +5,32 @@ import os
 import re
 import numpy as np
 
-# ===== SETTINGS =====
-MODEL_PATH = "runs/detect/train10/weights/best.pt"  # Path to trained YOLO model
-SOURCE_FOLDER = "/home/kishore/Downloads"           # Folder with test images
-OUTPUT_TEXT_FILE = "plate_text_results.txt"         # File to save plate numbers
-# ====================
+MODEL_PATH = "runs/detect/train10/weights/best.pt"
+SOURCE_FOLDER = "/home/kishore/Downloads"
+OUTPUT_TEXT_FILE = "plate_text_results.txt"
 
-# Load YOLO model
 model = YOLO(MODEL_PATH)
-
-# Load EasyOCR reader
 reader = easyocr.Reader(['en'])
 
-# Function to clean OCR result for Indian plates
 def clean_plate_text(text):
-    text = re.sub(r'[^A-Z0-9]', '', text.upper())  # Remove unwanted chars
-    match = re.match(r'^[A-Z]{2}[0-9]{1,2}[A-Z]{1,2}[0-9]{1,4}$', text)
-    return match.group(0) if match else None
+    text = re.sub(r'[^A-Z0-9]', '', text.upper())
+    if len(text) >= 6:  # allow anything with 6+ chars
+        return text
+    return None
 
-# Preprocess image for OCR
 def preprocess_plate(crop):
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    gray = cv2.bilateralFilter(gray, 11, 17, 17)  # Reduce noise
+    gray = cv2.bilateralFilter(gray, 11, 17, 17)
     thresh = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY, 11, 2
     )
     return thresh
 
-# Open text file for writing results
+def enlarge_crop(crop, scale=2):
+    h, w = crop.shape[:2]
+    return cv2.resize(crop, (w*scale, h*scale), interpolation=cv2.INTER_CUBIC)
+
 with open(OUTPUT_TEXT_FILE, "w") as f:
     results = model.predict(source=SOURCE_FOLDER, save=False, conf=0.5)
 
@@ -45,20 +42,26 @@ with open(OUTPUT_TEXT_FILE, "w") as f:
         for box in result.boxes.xyxy:
             x1, y1, x2, y2 = map(int, box)
             crop = img[y1:y2, x1:x2]
+
+            if crop.size == 0:
+                continue
+
+            crop = enlarge_crop(crop, scale=3)  # make it bigger for OCR
             preprocessed_crop = preprocess_plate(crop)
 
-            ocr_result = reader.readtext(preprocessed_crop)
-            if ocr_result:
-                detected_text = " ".join([res[1] for res in ocr_result])
-                cleaned = clean_plate_text(detected_text)
-                if cleaned:
-                    plate_texts.append(cleaned)
+            ocr_results = []
+            for attempt in [crop, preprocessed_crop]:
+                result_ocr = reader.readtext(attempt)
+                if result_ocr:
+                    detected_text = " ".join([res[1] for res in result_ocr])
+                    cleaned = clean_plate_text(detected_text)
+                    if cleaned:
+                        ocr_results.append(cleaned)
 
-        if plate_texts:
-            final_text = max(set(plate_texts), key=plate_texts.count)  # Most common
-        else:
-            final_text = "NO_TEXT_FOUND"
+            if ocr_results:
+                plate_texts.extend(ocr_results)
 
+        final_text = max(set(plate_texts), key=plate_texts.count) if plate_texts else "NO_TEXT_FOUND"
         f.write(f"{img_name} → {final_text}\n")
         print(f"{img_name} → {final_text}")
 
