@@ -6,7 +6,7 @@ from pathlib import Path
 from ultralytics import YOLO
 
 # ---------------- CONFIG ---------------- #
-MODEL_PATH = "runs/detect/train10/weights/best.pt"
+MODEL_PATH = "runs/detect/train10/weights/mid_epoch11.pt"
 SOURCE_DIR = "/home/kishore/Downloads"
 RESULTS_FILE = "plate_text_results.txt"
 SAVE_DEBUG_CROPS = True   # <-- NEW: Save cropped plate images for debugging
