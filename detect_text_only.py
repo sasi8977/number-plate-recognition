@@ -1,5 +1,6 @@
 import cv2
 import pytesseract
+import easyocr
 import re
 from pathlib import Path
 from ultralytics import YOLO
@@ -7,31 +8,28 @@ import os
 from datetime import datetime
 
 # ---------------- CONFIG ---------------- #
-MODEL_PATH = "runs/detect/train10/weights/best.pt"  # Use your final best model
-SOURCE_DIR = "/home/kishore/Downloads"              # Folder with test images
+MODEL_PATH = "best.pt"  # Your trained YOLO model
+SOURCE_DIR = "/home/kishore/Downloads"  # Folder with test images
 RESULTS_FILE = "plate_text_results.txt"
 DEBUG_CROPS_DIR = "debug_crops"
 DEBUG_PROCESSED_DIR = "debug_processed"
+PADDING = 15  # Extra pixels around YOLO detection box
 # ----------------------------------------- #
 
-# Always start fresh
-for folder in [DEBUG_CROPS_DIR, DEBUG_PROCESSED_DIR]:
-    if os.path.exists(folder):
-        for f in Path(folder).glob("*"):
-            f.unlink()
-    else:
-        os.makedirs(folder, exist_ok=True)
-
-if os.path.exists(RESULTS_FILE):
-    os.remove(RESULTS_FILE)
+# Prepare output folders
+os.makedirs(DEBUG_CROPS_DIR, exist_ok=True)
+os.makedirs(DEBUG_PROCESSED_DIR, exist_ok=True)
 
 # Load YOLO model
 model = YOLO(MODEL_PATH)
 
-# Regex for Indian number plates
-PLATE_REGEX = r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,2}[0-9]{3,4}'
+# Load EasyOCR
+reader = easyocr.Reader(['en'], gpu=False)
 
-# OCR configs
+# Regex for Indian number plates
+PLATE_REGEX = r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,2}[0-9]{4}'
+
+# Tesseract configs
 STRICT_OCR = '--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 --dpi 300'
 LOOSE_OCR = '--psm 6 --oem 3 --dpi 300'
 
@@ -41,27 +39,22 @@ def preprocess_plate(crop, aggressive=True):
     gray = cv2.resize(gray, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
 
     if aggressive:
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray = clahe.apply(gray)
-        gray = cv2.bilateralFilter(gray, 11, 17, 17)
+        gray = cv2.bilateralFilter(gray, 9, 15, 15)
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY, 11, 2
         )
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     else:
-        _, thresh = cv2.threshold(
-            gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     return thresh
 
-# Get all images sorted by last modified time
-image_paths = sorted(
-    [p for p in Path(SOURCE_DIR).glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png")],
-    key=lambda p: p.stat().st_mtime,
-    reverse=False
-)
-
+# Get all images
+image_paths = [p for p in Path(SOURCE_DIR).glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
 if not image_paths:
     print(f"❌ No images found in {SOURCE_DIR}")
     exit()
@@ -69,81 +62,82 @@ if not image_paths:
 results_text = []
 
 for img_path in image_paths:
-    img_time = datetime.fromtimestamp(img_path.stat().st_mtime)
-    print(f"\n📂 Processing: {img_path} (Last Modified: {img_time})")
+    mod_time = datetime.fromtimestamp(img_path.stat().st_mtime)
+    print(f"\n📂 Processing: {img_path} (Last Modified: {mod_time})")
 
     img = cv2.imread(str(img_path))
     if img is None:
-        print("❌ Could not read image.")
         continue
 
     detections = model(img)[0]
     best_guess = "UNREADABLE"
-    raw_best = ""
+    engine_used = "None"
 
     for i, box in enumerate(sorted(detections.boxes, key=lambda b: b.conf[0], reverse=True)):
         if box.conf[0] < 0.5:
             continue
-
         x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+        # Apply padding
+        x1 = max(0, x1 - PADDING)
+        y1 = max(0, y1 - PADDING)
+        x2 = min(img.shape[1], x2 + PADDING)
+        y2 = min(img.shape[0], y2 + PADDING)
+
         crop = img[y1:y2, x1:x2]
         if crop.size == 0:
             continue
 
+        # Save crop
         crop_path = f"{DEBUG_CROPS_DIR}/{img_path.stem}_plate{i+1}.jpg"
         cv2.imwrite(crop_path, crop)
 
-        # Pass 1: aggressive preprocessing
+        # Pass 1: Aggressive preprocessing + Tesseract strict
         processed = preprocess_plate(crop, aggressive=True)
-        processed_path = f"{DEBUG_PROCESSED_DIR}/{img_path.stem}_plate{i+1}_proc.jpg"
-        cv2.imwrite(processed_path, processed)
+        cv2.imwrite(f"{DEBUG_PROCESSED_DIR}/{img_path.stem}_plate{i+1}_proc.jpg", processed)
+        raw_strict = pytesseract.image_to_string(processed, config=STRICT_OCR).strip().replace(" ", "").upper()
+        match_strict = re.search(PLATE_REGEX, raw_strict)
 
-        # OCR attempts
-        ocr_attempts = [
-            pytesseract.image_to_string(processed, config=STRICT_OCR).strip().replace(" ", "").upper(),
-            pytesseract.image_to_string(processed, config=LOOSE_OCR).strip().replace(" ", "").upper()
-        ]
+        # Pass 2: Aggressive preprocessing + Tesseract loose
+        raw_loose = pytesseract.image_to_string(processed, config=LOOSE_OCR).strip().replace(" ", "").upper()
+        match_loose = re.search(PLATE_REGEX, raw_loose)
 
-        # Pass 2: simple preprocessing
-        if not any(re.search(PLATE_REGEX, text) for text in ocr_attempts):
-            processed_simple = preprocess_plate(crop, aggressive=False)
-            processed_path = f"{DEBUG_PROCESSED_DIR}/{img_path.stem}_plate{i+1}_proc_simple.jpg"
-            cv2.imwrite(processed_path, processed_simple)
-            ocr_attempts.extend([
-                pytesseract.image_to_string(processed_simple, config=STRICT_OCR).strip().replace(" ", "").upper(),
-                pytesseract.image_to_string(processed_simple, config=LOOSE_OCR).strip().replace(" ", "").upper()
-            ])
-
-        # Fallback: inverted image OCR
-        if not any(re.search(PLATE_REGEX, text) for text in ocr_attempts):
-            inverted = cv2.bitwise_not(processed)
-            ocr_attempts.append(
-                pytesseract.image_to_string(inverted, config=LOOSE_OCR).strip().replace(" ", "").upper()
-            )
-
-        # Select best match
-        for text in ocr_attempts:
-            match = re.search(PLATE_REGEX, text)
-            if match and len(match.group(0)) in (9, 10):
-                best_guess = match.group(0)
-                raw_best = text
-                break
-
-        if best_guess != "UNREADABLE":
-            break
+        # Pass 3: EasyOCR fallback if no match yet
+        if not (match_strict or match_loose):
+            easy_texts = reader.readtext(crop, detail=0)
+            easy_joined = "".join(easy_texts).replace(" ", "").upper()
+            match_easy = re.search(PLATE_REGEX, easy_joined)
         else:
-            raw_best = ocr_attempts[0] if ocr_attempts else ""
+            match_easy = None
+            easy_joined = ""
 
-    # Print and store result
-    print(f"{img_path.name} → RAW:{raw_best} → CLEAN:{best_guess}")
-    results_text.append(f"{img_path.name} → RAW:{raw_best} → CLEAN:{best_guess}")
+        # Decide final
+        if match_strict:
+            best_guess = match_strict.group(0)
+            engine_used = "Tesseract-Strict"
+        elif match_loose:
+            best_guess = match_loose.group(0)
+            engine_used = "Tesseract-Loose"
+        elif match_easy:
+            best_guess = match_easy.group(0)
+            engine_used = "EasyOCR"
+        else:
+            best_guess = "UNREADABLE"
+            engine_used = "None"
 
-# Save all results
+        print(f"{img_path.name} → Conf: {box.conf[0]:.2f} → RAW_STRICT: {raw_strict} → RAW_LOOSE: {raw_loose} → EASY: {easy_joined} → FINAL: {best_guess} → Engine: {engine_used}")
+
+        results_text.append(
+            f"{img_path.name} → Conf: {box.conf[0]:.2f} → RAW_STRICT: {raw_strict} → RAW_LOOSE: {raw_loose} → EASY: {easy_joined} → FINAL: {best_guess} → Engine: {engine_used}"
+        )
+
+# Save results to file
 with open(RESULTS_FILE, "w") as f:
     f.write("\n".join(results_text))
 
 print(f"\n✅ Results saved to {RESULTS_FILE}")
 print(f"🔍 Cropped plates saved in '{DEBUG_CROPS_DIR}', processed plates in '{DEBUG_PROCESSED_DIR}'")
+
 
 
 
