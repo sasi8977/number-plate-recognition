@@ -52,20 +52,23 @@ def preprocess_plate(crop, aggressive=True):
 
 # Get all images
 image_paths = [p for p in Path(SOURCE_DIR).glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+if not image_paths:
+    print(f"❌ No images found in {SOURCE_DIR}")
+    exit()
 
 results_text = []
 
 for img_path in image_paths:
     img = cv2.imread(str(img_path))
     if img is None:
-        print(f"❌ Could not read {img_path.name}")
+        print(f"❌ Could not read {img_path.name} — Skipping")
         results_text.append(f"{img_path.name} → UNREADABLE")
         continue
 
     detections = model(img)[0]
     if len(detections.boxes) == 0:
         print(f"{img_path.name} → ❌ No plates detected")
-        results_text.append(f"{img_path.name} → UNREADABLE")
+        results_text.append(f"{img_path.name} → UNREADABLE (File Read Error)")
         continue
 
     best_guess = "UNREADABLE"
