@@ -1,142 +1,102 @@
-import os
 import cv2
-import numpy as np
 import pytesseract
-import easyocr
+import re
+from pathlib import Path
 from ultralytics import YOLO
-from datetime import datetime
+import os
 
-# ==========================
-# CONFIGURATION
-# ==========================
-MODEL_DIR = "runs/detect/train10/weights"
-SAVE_DIR = "debug_crops"
-PROC_DIR = "debug_processed"
+# ---------------- CONFIG ---------------- #
+MODEL_PATH = "last_copy.pt"  # Your snapshot model
+SOURCE_DIR = "/home/kishore/Downloads/kishore"   # Images folder
 RESULTS_FILE = "plate_text_results.txt"
+DEBUG_CROPS_DIR = "debug_crops"
+DEBUG_PROCESSED_DIR = "debug_processed"
+# ----------------------------------------- #
 
-# Create directories
-os.makedirs(SAVE_DIR, exist_ok=True)
-os.makedirs(PROC_DIR, exist_ok=True)
+# Make debug dirs
+os.makedirs(DEBUG_CROPS_DIR, exist_ok=True)
+os.makedirs(DEBUG_PROCESSED_DIR, exist_ok=True)
 
-# Initialize OCR engines
-easyocr_reader = easyocr.Reader(['en'], gpu=False)
+# Load YOLO model
+model = YOLO(MODEL_PATH)
 
-# Tesseract config: whitelist uppercase A-Z and digits 0-9
-tess_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+# Regex for Indian number plates
+PLATE_REGEX = r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,2}[0-9]{4}'
 
-# ==========================
-# FUNCTIONS
-# ==========================
+# OCR configs
+STRICT_OCR = '--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 --dpi 300'
+LOOSE_OCR = '--psm 7 --oem 3 --dpi 300'
 
-def preprocess_plate(image):
-    """Apply preprocessing to improve OCR accuracy."""
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Noise removal but keep edges
-    filtered = cv2.bilateralFilter(gray, 11, 17, 17)
-    # Adaptive thresholding
-    thresh = cv2.adaptiveThreshold(
-        filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY, 11, 2
-    )
-    # Increase contrast
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(thresh)
-    return enhanced
+# Preprocessing
+def preprocess_plate(crop):
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    gray = cv2.bilateralFilter(gray, 11, 17, 17)
+    thresh = cv2.adaptiveThreshold(gray, 255,
+                                   cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 31, 2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    return thresh
 
-def ocr_easyocr(image):
-    """Run EasyOCR and return the result string."""
-    results = easyocr_reader.readtext(image, detail=0, paragraph=False)
-    return results[0] if results else ""
+# Get all images
+image_paths = [p for p in Path(SOURCE_DIR).glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
 
-def ocr_tesseract(image):
-    """Run Tesseract OCR and return the result string."""
-    text = pytesseract.image_to_string(image, config=tess_config)
-    return text.strip()
+results_text = []
 
-def clean_text(text):
-    """Keep only A-Z and 0-9."""
-    return ''.join([c for c in text.upper() if c.isalnum()])
+for img_path in image_paths:
+    img = cv2.imread(str(img_path))
+    if img is None:
+        continue
 
-def select_best(text1, text2):
-    """Pick the better OCR result."""
-    # Prefer the longer one with only valid characters
-    t1 = clean_text(text1)
-    t2 = clean_text(text2)
-    if len(t1) >= len(t2):
-        return t1 if t1 else t2
-    else:
-        return t2 if t2 else t1
+    detections = model(img)[0]
+    best_guess = "UNREADABLE"
+    raw_best = ""
 
-# ==========================
-# MAIN
-# ==========================
-
-def main():
-    # Choose model
-    models = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
-    if not models:
-        print("❌ No model found in", MODEL_DIR)
-        return
-    print("\nAvailable models:")
-    for i, m in enumerate(models, 1):
-        print(f"{i}. {m}")
-    choice = input("\nSelect model number (press Enter for latest): ").strip()
-    model_file = models[-1] if choice == "" else models[int(choice) - 1]
-    model_path = os.path.join(MODEL_DIR, model_file)
-    print(f"\n✅ Using model: {model_file}")
-
-    # Load YOLO model
-    model = YOLO(model_path)
-
-    # Load test images
-    images = [f for f in os.listdir() if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-    if not images:
-        print("❌ No test images found in current directory.")
-        return
-
-    results_log = []
-    for img_file in images:
-        img = cv2.imread(img_file)
-        if img is None:
+    for i, box in enumerate(sorted(detections.boxes, key=lambda b: b.conf[0], reverse=True)):
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        crop = img[y1:y2, x1:x2]
+        if crop.size == 0:
             continue
 
-        # Run detection
-        detections = model(img)[0]
-        plate_texts = []
+        # Save crops
+        crop_path = f"{DEBUG_CROPS_DIR}/{img_path.stem}_plate{i+1}.jpg"
+        cv2.imwrite(crop_path, crop)
 
-        for i, box in enumerate(detections.boxes):
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            crop = img[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
+        processed = preprocess_plate(crop)
+        processed_path = f"{DEBUG_PROCESSED_DIR}/{img_path.stem}_plate{i+1}_proc.jpg"
+        cv2.imwrite(processed_path, processed)
 
-            # Save raw crop
-            crop_path = os.path.join(SAVE_DIR, f"{os.path.splitext(img_file)[0]}_{i}.png")
-            cv2.imwrite(crop_path, crop)
+        # OCR pass 1 (strict)
+        raw_text_strict = pytesseract.image_to_string(processed, config=STRICT_OCR).strip().replace(" ", "").upper()
+        # OCR pass 2 (loose)
+        raw_text_loose = pytesseract.image_to_string(processed, config=LOOSE_OCR).strip().replace(" ", "").upper()
 
-            # Preprocess crop
-            processed = preprocess_plate(crop)
-            proc_path = os.path.join(PROC_DIR, f"{os.path.splitext(img_file)[0]}_{i}.png")
-            cv2.imwrite(proc_path, processed)
+        match_strict = re.search(PLATE_REGEX, raw_text_strict)
+        match_loose = re.search(PLATE_REGEX, raw_text_loose)
 
-            # OCR both methods
-            easy_text = ocr_easyocr(processed)
-            tess_text = ocr_tesseract(processed)
+        if match_strict:
+            best_guess = match_strict.group(0)
+            raw_best = raw_text_strict
+            break
+        elif match_loose:
+            best_guess = match_loose.group(0)
+            raw_best = raw_text_loose
+            break
+        else:
+            # Keep a non-matching raw text as fallback
+            raw_best = raw_best or raw_text_strict or raw_text_loose
 
-            # Select best
-            best_text = select_best(easy_text, tess_text)
-            plate_texts.append(best_text if best_text else "UNREADABLE")
+    results_text.append(f"{img_path.name} → RAW:{raw_best} → CLEAN:{best_guess}")
+    print(f"{img_path.name} → RAW:{raw_best} → CLEAN:{best_guess}")
 
-        # Save result for this image
-        results_log.append(f"{img_file} → {', '.join(plate_texts)}")
-        print(f"{img_file} → {', '.join(plate_texts)}")
+# Save results
+with open(RESULTS_FILE, "w") as f:
+    f.write("\n".join(results_text))
 
-    # Write to file
-    with open(RESULTS_FILE, "w") as f:
-        f.write("\n".join(results_log))
-    print(f"\n✅ Results saved to {RESULTS_FILE}")
-    print(f"🔍 Cropped plates saved in '{SAVE_DIR}', processed plates in '{PROC_DIR}'")
+print(f"\n✅ Results saved to {RESULTS_FILE}")
+print(f"🔍 Cropped plates saved in '{DEBUG_CROPS_DIR}', processed plates in '{DEBUG_PROCESSED_DIR}'")
 
-if __name__ == "__main__":
-    main()
 
