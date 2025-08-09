@@ -7,7 +7,7 @@ import os
 
 # ---------------- CONFIG ---------------- #
 MODEL_PATH = "runs/detect/train10/weights/best.pt"  # latest trained model
-SOURCE_DIR = "/home/kishore/Downloads/kishore"      # folder with test images
+SOURCE_DIR = "/home/kishore/Downloads"      # folder with test images
 RESULTS_FILE = "plate_text_results.txt"
 DEBUG_CROPS_DIR = "debug_crops"
 DEBUG_PROCESSED_DIR = "debug_processed"
