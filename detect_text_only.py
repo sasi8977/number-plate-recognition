@@ -11,7 +11,7 @@ from ultralytics import YOLO
 # USER SETTINGS
 # =====================
 MODEL_PATH = "/home/kishore/Downloads/number-plate-recognition-main/runs/detect/train10/weights/best.pt"
-SOURCE_DIR = "/home/kishore/Downloads/number-plate-recognition-main/test_images"
+SOURCE_DIR = "/home/kishore/Downloads/test_images"
 RESULTS_FILE = "plate_text_results.txt"
 DEBUG_CROPS_DIR = "debug_crops"
 DEBUG_PROC_DIR = "debug_proc"
