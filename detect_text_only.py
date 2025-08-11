@@ -1,11 +1,12 @@
 import os
-import re
-from pathlib import Path
-from ultralytics import YOLO
 import cv2
+import re
+import torch
 import easyocr
 import pytesseract
-from pytesseract import Output
+import numpy as np
+from pathlib import Path
+from PIL import Image
 
 # =====================
 # USER SETTINGS
@@ -13,93 +14,120 @@ from pytesseract import Output
 MODEL_PATH = "/home/kishore/Downloads/number-plate-recognition-main/runs/detect/train10/weights/best.pt"
 SOURCE_DIR = "/home/kishore/Downloads/test_images"
 RESULTS_FILE = "plate_text_results.txt"
+DEBUG_CROPS_DIR = "debug_crops"
+DEBUG_PROC_DIR = "debug_proc"
 PADDING = 15
 PLATE_REGEX = r'^[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{1,4}$'  # Indian plate format
-# =====================
+
+# Create output folders
+os.makedirs(DEBUG_CROPS_DIR, exist_ok=True)
+os.makedirs(DEBUG_PROC_DIR, exist_ok=True)
 
 # Load YOLO model
-model = YOLO(MODEL_PATH)
+model = torch.hub.load("ultralytics/yolov5", "custom", path=MODEL_PATH)
+model.conf = 0.25  # Lowered threshold for more detections
 
-# Load OCR
-easyocr_reader = easyocr.Reader(['en'], gpu=False)
+# Load OCR engines
+easy_reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
 
-# Ensure source exists
-if not os.path.exists(SOURCE_DIR):
-    raise FileNotFoundError(f"Source directory not found: {SOURCE_DIR}")
-
-# Function: Validate plate
-def is_valid_plate(text):
-    return re.match(PLATE_REGEX, text.replace(" ", "")) is not None
-
-# Function: Preprocess for OCR
 def preprocess_for_ocr(crop):
+    """Preprocess image for sharper OCR results with contrast boost."""
+    # Convert to grayscale
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    gray = cv2.bilateralFilter(gray, 9, 75, 75)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Slight blur to reduce noise, but keep edges
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # Sharpen edges (extra clarity for characters)
+    kernel = np.array([[0, -1, 0],
+                       [-1, 5, -1],
+                       [0, -1, 0]])
+    gray = cv2.filter2D(gray, -1, kernel)
+
+    # Increase contrast
+    gray = cv2.equalizeHist(gray)
+
+    # Adaptive threshold for lighting variation
+    thresh = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31, 15
+    )
+
+    # Invert so text is black on white (OCR prefers this)
+    thresh = cv2.bitwise_not(thresh)
+
     return thresh
 
-# Function: Run OCR
-def run_ocr(crop):
-    crop_proc = preprocess_for_ocr(crop)
 
-    # Try EasyOCR
-    results_easy = easyocr_reader.readtext(crop_proc, detail=0)
-    results_easy = [r.upper().replace(" ", "") for r in results_easy if len(r) >= 6]
+def run_easyocr(img):
+    results = easy_reader.readtext(img)
+    if results:
+        return max(results, key=lambda x: x[2])[1].strip().upper()
+    return ""
 
-    # Try Tesseract
+def run_tesseract(img):
     config = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    text_tess = pytesseract.image_to_string(crop_proc, config=config)
-    text_tess = text_tess.strip().upper().replace(" ", "")
+    text = pytesseract.image_to_string(img, config=config)
+    return text.strip().upper()
 
-    candidates = []
-    if results_easy:
-        candidates.extend(results_easy)
-    if text_tess:
-        candidates.append(text_tess)
+def score_plate(text):
+    return bool(re.match(PLATE_REGEX, text))
 
-    # Keep only valid plates
-    valid = [c for c in candidates if is_valid_plate(c)]
-    return valid[0] if valid else ""
+def process_image(image_path):
+    img_name = os.path.basename(image_path)
+    img = cv2.imread(image_path)
 
-# Main
-with open(RESULTS_FILE, "w") as f_out:
-    for file_name in os.listdir(SOURCE_DIR):
-        if not file_name.lower().endswith((".jpg", ".jpeg", ".png")):
-            continue
+    # YOLO detection
+    results = model(img)
+    detections = results.xyxy[0].cpu().numpy()
 
-        img_path = os.path.join(SOURCE_DIR, file_name)
-        img = cv2.imread(img_path)
+    if len(detections) == 0:
+        return f"{img_name} | NO_PLATE | YOLO: 0.00"
 
-        if img is None:
-            print(f"[WARN] Cannot read image: {img_path}")
-            continue
+    best_conf = 0
+    best_plate = "NO_PLATE"
 
-        results = model.predict(source=img_path, conf=0.5, verbose=False)
+    for det in detections:
+        x1, y1, x2, y2, conf, cls = det
+        conf = float(conf)
+        if conf > best_conf:
+            # Apply padding
+            x1 = max(0, int(x1) - PADDING)
+            y1 = max(0, int(y1) - PADDING)
+            x2 = min(img.shape[1], int(x2) + PADDING)
+            y2 = min(img.shape[0], int(y2) + PADDING)
 
-        best_text = ""
-        best_conf = 0.0
+            plate_crop = img[y1:y2, x1:x2]
+            cv2.imwrite(f"{DEBUG_CROPS_DIR}/{img_name}", plate_crop)
 
-        for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = float(box.conf[0])
+            proc_img = preprocess_for_ocr(plate_crop)
+            cv2.imwrite(f"{DEBUG_PROC_DIR}/{img_name}", proc_img)
 
-                # Apply padding
-                x1 = max(0, x1 - PADDING)
-                y1 = max(0, y1 - PADDING)
-                x2 = min(img.shape[1], x2 + PADDING)
-                y2 = min(img.shape[0], y2 + PADDING)
+            # Run both OCR engines
+            easy_text = run_easyocr(proc_img)
+            tess_text = run_tesseract(proc_img)
 
-                crop = img[y1:y2, x1:x2]
+            candidates = [easy_text, tess_text]
+            candidates = [c for c in candidates if c and score_plate(c)]
 
-                text = run_ocr(crop)
+            if candidates:
+                best_plate = max(candidates, key=len)
+            else:
+                best_plate = easy_text or tess_text or "NO_PLATE"
 
-                if text and conf > best_conf:
-                    best_text = text
-                    best_conf = conf
+            best_conf = conf
 
-        line = f"{file_name} | {best_text if best_text else 'NO_PLATE'} | YOLO: {best_conf:.2f}"
-        print(line)
-        f_out.write(line + "\n")
+    return f"{img_name} | {best_plate} | YOLO: {best_conf:.2f}"
 
-print(f"\n✅ Detection completed. Results saved to: {RESULTS_FILE}")
+if __name__ == "__main__":
+    results_list = []
+    for file in sorted(Path(SOURCE_DIR).glob("*")):
+        if file.suffix.lower() in [".jpg", ".jpeg", ".png"]:
+            results_list.append(process_image(str(file)))
+
+    with open(RESULTS_FILE, "w") as f:
+        for line in results_list:
+            print(line)
+            f.write(line + "\n")
