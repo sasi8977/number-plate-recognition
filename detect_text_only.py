@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 
 # ---------------- CONFIG ---------------- #
-MODEL_PATH = "runs/detect/train10/weights/best.pt"
+MODEL_PATH = "/home/kishore/Downloads/number-plate-recognition-main/runs/detect/train10/weights/best.pt"
 SOURCE_DIR = "/home/kishore/Downloads"  # Folder with test images
 RESULTS_FILE = "plate_text_results.txt"
 DEBUG_CROPS_DIR = "debug_crops"
