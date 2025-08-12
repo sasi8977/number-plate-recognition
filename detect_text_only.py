@@ -30,6 +30,19 @@ reader = easyocr.Reader(['en'])
 # =====================
 # UTILITIES
 # =====================
+def cleanup_plate_text(text):
+    """Fix common OCR mistakes like O/0, I/1."""
+    corrections = {
+        '0O': '0', 'O0': '0', 'O': '0',
+        'I': '1', 'L': '1', 'Z': '2',
+        'S': '5', 'B': '8'
+    }
+    cleaned = ""
+    for ch in text:
+        cleaned += corrections.get(ch, ch)
+    return cleaned
+
+
 def preprocess_plate(plate_img, aggressive=False):
     """Return preprocessed image for OCR."""
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
@@ -95,7 +108,8 @@ def tesseract_ocr(image, psm=8, whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     """Run Tesseract OCR."""
     config = f"-c tessedit_char_whitelist={whitelist} --psm {psm} --dpi 300"
     text = pytesseract.image_to_string(image, config=config).strip()
-    return re.sub(r"[^A-Z0-9]", "", text.upper())
+    text = re.sub(r"[^A-Z0-9]", "", text.upper())
+    return cleanup_plate_text(text)
 
 
 def easyocr_ocr(image):
@@ -104,16 +118,17 @@ def easyocr_ocr(image):
     if not results:
         return "", 0
     text, conf = results[0][1], results[0][2]
-    return re.sub(r"[^A-Z0-9]", "", text.upper()), conf
+    text = re.sub(r"[^A-Z0-9]", "", text.upper())
+    return cleanup_plate_text(text), conf
 
 
 def regex_match_score(text):
     """Score text based on how closely it matches PLATE_REGEX."""
     if re.match(PLATE_REGEX, text):
-        return 2  # Perfect match
+        return 3  # Perfect match gets higher score
     elif len(text) >= 6:
-        ratio = difflib.SequenceMatcher(None, re.sub(r"[^A-Z0-9]", "", text), "AB12CD1234").ratio()
-        return 1 if ratio > 0.5 else 0
+        ratio = difflib.SequenceMatcher(None, text, "AB12CD1234").ratio()
+        return 2 if ratio > 0.65 else 1
     return 0
 
 
@@ -185,7 +200,7 @@ def process_image(img_path):
         best_light = pick_best(light_candidates)
 
         # If regex score is poor, run aggressive mode
-        if best_light[2] < 2:  # score 2 = perfect match
+        if best_light[2] < 3:
             proc_img = preprocess_plate(plate_crop, aggressive=True)
             proc_name = f"{img_name}_plate{det_idx+1}_agg.png"
             cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
@@ -228,3 +243,4 @@ with open(RESULTS_FILE, "w") as f:
         f.write(f"{r['image']} | {r['plate_text']} | {r['method']} | YOLO: {r['yolo_conf']:.2f}\n")
 
 print(f"Saved {len(results_list)} results to {RESULTS_FILE}")
+
