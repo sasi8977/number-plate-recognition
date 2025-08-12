@@ -115,6 +115,7 @@ def regex_match_score(text):
         ratio = difflib.SequenceMatcher(None, re.sub(r"[^A-Z0-9]", "", text), "AB12CD1234").ratio()
         return 1 if ratio > 0.5 else 0
     return 0
+
 def run_ocr_all(proc_img):
     """Run OCR in fallback order: EasyOCR -> Tesseract loose -> Tesseract strict."""
     candidates = []
