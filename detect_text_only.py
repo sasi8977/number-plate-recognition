@@ -33,6 +33,10 @@ reader = easyocr.Reader(['en'])
 def preprocess_plate(plate_img, aggressive=False):
     """Return preprocessed image for OCR."""
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
+        # Handle low-light images
+    mean_brightness = np.mean(plate_gray)
+    if mean_brightness < 60:  # dark plate
+        plate_gray = cv2.equalizeHist(plate_gray)
     plate_gray = cv2.resize(plate_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
     # ✅ Lightweight enhancement: contrast + sharpness
@@ -41,6 +45,8 @@ def preprocess_plate(plate_img, aggressive=False):
                              [-1, 5, -1],
                              [0, -1, 0]])
     plate_gray = cv2.filter2D(plate_gray, -1, kernel_sharp)  # sharpen
+            # Deblur before aggressive processing
+        plate_gray = cv2.GaussianBlur(plate_gray, (1, 1), 0)
 
     if aggressive:
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -54,6 +60,12 @@ def preprocess_plate(plate_img, aggressive=False):
         plate_thresh = cv2.morphologyEx(plate_thresh, cv2.MORPH_CLOSE, kernel)
         plate_thresh = cv2.dilate(plate_thresh, kernel, iterations=1)
     else:
+                # Slight sharpen for normal mode
+        kernel_light = np.array([[0, -1, 0],
+                                 [-1, 5, -1],
+                                 [0, -1, 0]])
+        plate_gray = cv2.filter2D(plate_gray, -1, kernel_light)
+
         plate_gray = cv2.GaussianBlur(plate_gray, (3, 3), 0)
         _, plate_thresh = cv2.threshold(
             plate_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
@@ -92,7 +104,7 @@ def process_image(img_path):
         print(f"Error loading image: {img_path}")
         return None
 
-    results = model(img)[0]
+    results = model(img, config=0.35)[0]
     detections = results.boxes
     img_name = os.path.basename(img_path)
     best_plate_info = None
@@ -102,8 +114,8 @@ def process_image(img_path):
         if conf < 0.4:
             continue
         x1, y1, x2, y2 = map(int, det.xyxy[0])
-        x1, y1 = max(0, x1 - PADDING), max(0, y1 - PADDING)
-        x2, y2 = min(img.shape[1], x2 + PADDING), min(img.shape[0], y2 + PADDING)
+                x1, y1 = max(0, x1 - PADDING - 5), max(0, y1 - PADDING - 5)
+        x2, y2 = min(img.shape[1], x2 + PADDING + 5), min(img.shape[0], y2 + PADDING + 5)
         plate_crop = img[y1:y2, x1:x2]
 
         crop_name = f"{img_name}_plate{det_idx+1}.png"
