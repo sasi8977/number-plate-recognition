@@ -35,6 +35,13 @@ def preprocess_plate(plate_img, aggressive=False):
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
     plate_gray = cv2.resize(plate_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
+    # ✅ Lightweight enhancement: contrast + sharpness
+    plate_gray = cv2.convertScaleAbs(plate_gray, alpha=1.6, beta=20)  # contrast/brightness
+    kernel_sharp = np.array([[0, -1, 0],
+                             [-1, 5, -1],
+                             [0, -1, 0]])
+    plate_gray = cv2.filter2D(plate_gray, -1, kernel_sharp)  # sharpen
+
     if aggressive:
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         plate_gray = clahe.apply(plate_gray)
@@ -47,11 +54,12 @@ def preprocess_plate(plate_img, aggressive=False):
         plate_thresh = cv2.morphologyEx(plate_thresh, cv2.MORPH_CLOSE, kernel)
         plate_thresh = cv2.dilate(plate_thresh, kernel, iterations=1)
     else:
-        plate_gray = cv2.GaussianBlur(plate_gray, (5, 5), 0)
+        plate_gray = cv2.GaussianBlur(plate_gray, (3, 3), 0)
         _, plate_thresh = cv2.threshold(
             plate_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
     return plate_thresh
+
 
 def tesseract_ocr(image, psm=8, whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"):
     """Run Tesseract OCR."""
