@@ -26,50 +26,68 @@ os.makedirs(DEBUG_PROC_DIR, exist_ok=True)
 model = YOLO(MODEL_PATH)
 reader = easyocr.Reader(['en'])
 
+
 # =====================
 # UTILITIES
 # =====================
-
 def preprocess_plate(plate_img, aggressive=False):
     """Return preprocessed image for OCR."""
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
-        # Handle low-light images
+
+    # Handle low-light images
     mean_brightness = np.mean(plate_gray)
     if mean_brightness < 60:  # dark plate
         plate_gray = cv2.equalizeHist(plate_gray)
+
+    # Resize for better OCR accuracy
     plate_gray = cv2.resize(plate_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    # ✅ Lightweight enhancement: contrast + sharpness
-    plate_gray = cv2.convertScaleAbs(plate_gray, alpha=1.6, beta=20)  # contrast/brightness
+    # Contrast + brightness boost
+    plate_gray = cv2.convertScaleAbs(plate_gray, alpha=1.6, beta=20)
+
+    # Sharpen
     kernel_sharp = np.array([[0, -1, 0],
                              [-1, 5, -1],
                              [0, -1, 0]])
-    plate_gray = cv2.filter2D(plate_gray, -1, kernel_sharp)  # sharpen
-            # Deblur before aggressive processing
-        plate_gray = cv2.GaussianBlur(plate_gray, (1, 1), 0)
+    plate_gray = cv2.filter2D(plate_gray, -1, kernel_sharp)
+
+    # Light blur to reduce pixel noise
+    plate_gray = cv2.GaussianBlur(plate_gray, (1, 1), 0)
 
     if aggressive:
+        # CLAHE (adaptive contrast enhancement)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         plate_gray = clahe.apply(plate_gray)
+
+        # Median blur to remove speckles
         plate_gray = cv2.medianBlur(plate_gray, 3)
+
+        # Adaptive threshold for high-contrast binarization
         plate_thresh = cv2.adaptiveThreshold(
             plate_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY, 41, 15
         )
+
+        # Morphological closing + dilation
         kernel = np.ones((3, 3), np.uint8)
         plate_thresh = cv2.morphologyEx(plate_thresh, cv2.MORPH_CLOSE, kernel)
         plate_thresh = cv2.dilate(plate_thresh, kernel, iterations=1)
+
     else:
-                # Slight sharpen for normal mode
+        # Light sharpen
         kernel_light = np.array([[0, -1, 0],
                                  [-1, 5, -1],
                                  [0, -1, 0]])
         plate_gray = cv2.filter2D(plate_gray, -1, kernel_light)
 
+        # Gaussian blur
         plate_gray = cv2.GaussianBlur(plate_gray, (3, 3), 0)
+
+        # Otsu's threshold
         _, plate_thresh = cv2.threshold(
             plate_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
+
     return plate_thresh
 
 
@@ -79,6 +97,7 @@ def tesseract_ocr(image, psm=8, whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     text = pytesseract.image_to_string(image, config=config).strip()
     return re.sub(r"[^A-Z0-9]", "", text.upper())
 
+
 def easyocr_ocr(image):
     """Run EasyOCR."""
     results = reader.readtext(image)
@@ -87,16 +106,16 @@ def easyocr_ocr(image):
     text, conf = results[0][1], results[0][2]
     return re.sub(r"[^A-Z0-9]", "", text.upper()), conf
 
+
 def regex_match_score(text):
     """Score text based on how closely it matches PLATE_REGEX."""
     if re.match(PLATE_REGEX, text):
         return 2  # Perfect match
     elif len(text) >= 6:
-        # Partial match scoring
-        expected_len = 8
         ratio = difflib.SequenceMatcher(None, re.sub(r"[^A-Z0-9]", "", text), "AB12CD1234").ratio()
         return 1 if ratio > 0.5 else 0
     return 0
+
 
 def process_image(img_path):
     img = cv2.imread(img_path)
@@ -104,7 +123,7 @@ def process_image(img_path):
         print(f"Error loading image: {img_path}")
         return None
 
-    results = model(img, config=0.35)[0]
+    results = model(img, conf=0.35)[0]
     detections = results.boxes
     img_name = os.path.basename(img_path)
     best_plate_info = None
@@ -113,11 +132,12 @@ def process_image(img_path):
         conf = float(det.conf)
         if conf < 0.4:
             continue
-        x1, y1, x2, y2 = map(int, det.xyxy[0])
-                x1, y1 = max(0, x1 - PADDING - 5), max(0, y1 - PADDING - 5)
-        x2, y2 = min(img.shape[1], x2 + PADDING + 5), min(img.shape[0], y2 + PADDING + 5)
-        plate_crop = img[y1:y2, x1:x2]
 
+        x1, y1, x2, y2 = map(int, det.xyxy[0])
+        x1, y1 = max(0, x1 - PADDING - 5), max(0, y1 - PADDING - 5)
+        x2, y2 = min(img.shape[1], x2 + PADDING + 5), min(img.shape[0], y2 + PADDING + 5)
+
+        plate_crop = img[y1:y2, x1:x2]
         crop_name = f"{img_name}_plate{det_idx+1}.png"
         cv2.imwrite(os.path.join(DEBUG_CROPS_DIR, crop_name), plate_crop)
 
@@ -128,19 +148,19 @@ def process_image(img_path):
             proc_name = f"{img_name}_plate{det_idx+1}_{'agg' if pass_mode else 'light'}.png"
             cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
 
-            # Run Tesseract strict
+            # Tesseract strict
             txt_strict = tesseract_ocr(proc_img, psm=8)
             all_candidates.append(("TessStrict", txt_strict, regex_match_score(txt_strict), None))
 
-            # Run Tesseract loose
-            txt_loose = tesseract_ocr(proc_img, psm=6, whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+            # Tesseract loose
+            txt_loose = tesseract_ocr(proc_img, psm=6)
             all_candidates.append(("TessLoose", txt_loose, regex_match_score(txt_loose), None))
 
-            # Run EasyOCR
+            # EasyOCR
             txt_easy, conf_easy = easyocr_ocr(proc_img)
             all_candidates.append(("EasyOCR", txt_easy, regex_match_score(txt_easy), conf_easy))
 
-        # Pick best candidate: highest regex score, then confidence, then length closeness
+        # Pick best candidate
         best_candidate = sorted(
             all_candidates,
             key=lambda x: (x[2], x[3] if x[3] is not None else 0, -abs(len(x[1]) - 9)),
@@ -160,6 +180,7 @@ def process_image(img_path):
             "yolo_conf": best_plate_info[4]
         }
     return None
+
 
 # =====================
 # MAIN EXECUTION
