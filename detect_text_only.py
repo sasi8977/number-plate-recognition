@@ -116,6 +116,7 @@ def regex_match_score(text):
         return 1 if ratio > 0.5 else 0
     return 0
 
+
 def run_ocr_all(proc_img):
     """Run OCR in fallback order: EasyOCR -> Tesseract loose -> Tesseract strict."""
     candidates = []
@@ -135,6 +136,15 @@ def run_ocr_all(proc_img):
     return candidates
 
 
+def pick_best(candidates):
+    """Pick best OCR result from candidates."""
+    return sorted(
+        candidates,
+        key=lambda x: (x[2], x[3] if x[3] is not None else 0, -abs(len(x[1]) - 9)),
+        reverse=True
+    )[0]
+
+
 def process_image(img_path):
     img = cv2.imread(img_path)
     if img is None:
@@ -142,12 +152,12 @@ def process_image(img_path):
         return None
 
     results = model.predict(
-    source=img,
-    conf=0.25,       # lower conf to catch faint plates
-    iou=0.5,         # allow more overlaps
-    imgsz=1280,      # larger size for better small-object detection
-    augment=True     # test-time augmentation
-)[0]
+        source=img,
+        conf=0.25,  # lower conf to catch faint plates
+        iou=0.5,    # allow more overlaps
+        imgsz=1280, # larger size for better small-object detection
+        augment=True
+    )[0]
 
     detections = results.boxes
     img_name = os.path.basename(img_path)
@@ -166,45 +176,26 @@ def process_image(img_path):
         crop_name = f"{img_name}_plate{det_idx+1}.png"
         cv2.imwrite(os.path.join(DEBUG_CROPS_DIR, crop_name), plate_crop)
 
-        all_candidates = []
-
         # First pass: light preprocessing
-proc_img = preprocess_plate(plate_crop, aggressive=False)
-proc_name = f"{img_name}_plate{det_idx+1}_light.png"
-cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
+        proc_img = preprocess_plate(plate_crop, aggressive=False)
+        proc_name = f"{img_name}_plate{det_idx+1}_light.png"
+        cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
 
-light_candidates = run_ocr_all(proc_img)  # <- we'll define this helper
-best_light = pick_best(light_candidates)
+        light_candidates = run_ocr_all(proc_img)
+        best_light = pick_best(light_candidates)
 
-# If regex score is poor, run aggressive mode
-if best_light[2] < 2:  # score 2 = perfect match
-    proc_img = preprocess_plate(plate_crop, aggressive=True)
-    proc_name = f"{img_name}_plate{det_idx+1}_agg.png"
-    cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
-    aggressive_candidates = run_ocr_all(proc_img)
-    all_candidates = light_candidates + aggressive_candidates
-else:
-    all_candidates = light_candidates
+        # If regex score is poor, run aggressive mode
+        if best_light[2] < 2:  # score 2 = perfect match
+            proc_img = preprocess_plate(plate_crop, aggressive=True)
+            proc_name = f"{img_name}_plate{det_idx+1}_agg.png"
+            cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
+            aggressive_candidates = run_ocr_all(proc_img)
+            all_candidates = light_candidates + aggressive_candidates
+        else:
+            all_candidates = light_candidates
 
-
-            # Tesseract strict
-            txt_strict = tesseract_ocr(proc_img, psm=8)
-            all_candidates.append(("TessStrict", txt_strict, regex_match_score(txt_strict), None))
-
-            # Tesseract loose
-            txt_loose = tesseract_ocr(proc_img, psm=6)
-            all_candidates.append(("TessLoose", txt_loose, regex_match_score(txt_loose), None))
-
-            # EasyOCR
-            txt_easy, conf_easy = easyocr_ocr(proc_img)
-            all_candidates.append(("EasyOCR", txt_easy, regex_match_score(txt_easy), conf_easy))
-
-        # Pick best candidate
-        best_candidate = sorted(
-            all_candidates,
-            key=lambda x: (x[2], x[3] if x[3] is not None else 0, -abs(len(x[1]) - 9)),
-            reverse=True
-        )[0]
+        # Pick best candidate overall
+        best_candidate = pick_best(all_candidates)
 
         if not best_plate_info or best_candidate[2] > best_plate_info[2]:
             best_plate_info = best_candidate + (conf,)
