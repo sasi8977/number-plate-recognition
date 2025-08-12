@@ -15,7 +15,7 @@ SOURCE_DIR = "/home/kishore/Downloads/test_images"
 RESULTS_FILE = "plate_text_results.txt"
 DEBUG_CROPS_DIR = "debug_crops"
 DEBUG_PROC_DIR = "debug_proc"
-PADDING = 15
+PADDING = 20
 PLATE_REGEX = r'^[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{1,4}$'  # Indian plate format
 
 # Create debug folders
@@ -115,6 +115,23 @@ def regex_match_score(text):
         ratio = difflib.SequenceMatcher(None, re.sub(r"[^A-Z0-9]", "", text), "AB12CD1234").ratio()
         return 1 if ratio > 0.5 else 0
     return 0
+def run_ocr_all(proc_img):
+    """Run OCR in fallback order: EasyOCR -> Tesseract loose -> Tesseract strict."""
+    candidates = []
+
+    # EasyOCR first
+    txt_easy, conf_easy = easyocr_ocr(proc_img)
+    candidates.append(("EasyOCR", txt_easy, regex_match_score(txt_easy), conf_easy))
+
+    # Tesseract loose
+    txt_loose = tesseract_ocr(proc_img, psm=6)
+    candidates.append(("TessLoose", txt_loose, regex_match_score(txt_loose), None))
+
+    # Tesseract strict
+    txt_strict = tesseract_ocr(proc_img, psm=8)
+    candidates.append(("TessStrict", txt_strict, regex_match_score(txt_strict), None))
+
+    return candidates
 
 
 def process_image(img_path):
@@ -123,7 +140,14 @@ def process_image(img_path):
         print(f"Error loading image: {img_path}")
         return None
 
-    results = model(img, conf=0.35)[0]
+    results = model.predict(
+    source=img,
+    conf=0.25,       # lower conf to catch faint plates
+    iou=0.5,         # allow more overlaps
+    imgsz=1280,      # larger size for better small-object detection
+    augment=True     # test-time augmentation
+)[0]
+
     detections = results.boxes
     img_name = os.path.basename(img_path)
     best_plate_info = None
@@ -143,10 +167,24 @@ def process_image(img_path):
 
         all_candidates = []
 
-        for pass_mode in [False, True]:  # light, aggressive
-            proc_img = preprocess_plate(plate_crop, aggressive=pass_mode)
-            proc_name = f"{img_name}_plate{det_idx+1}_{'agg' if pass_mode else 'light'}.png"
-            cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
+        # First pass: light preprocessing
+proc_img = preprocess_plate(plate_crop, aggressive=False)
+proc_name = f"{img_name}_plate{det_idx+1}_light.png"
+cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
+
+light_candidates = run_ocr_all(proc_img)  # <- we'll define this helper
+best_light = pick_best(light_candidates)
+
+# If regex score is poor, run aggressive mode
+if best_light[2] < 2:  # score 2 = perfect match
+    proc_img = preprocess_plate(plate_crop, aggressive=True)
+    proc_name = f"{img_name}_plate{det_idx+1}_agg.png"
+    cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
+    aggressive_candidates = run_ocr_all(proc_img)
+    all_candidates = light_candidates + aggressive_candidates
+else:
+    all_candidates = light_candidates
+
 
             # Tesseract strict
             txt_strict = tesseract_ocr(proc_img, psm=8)
