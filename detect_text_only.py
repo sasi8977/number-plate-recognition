@@ -16,7 +16,7 @@ RESULTS_FILE = "plate_text_results.txt"
 DEBUG_CROPS_DIR = "debug_crops"
 DEBUG_PROC_DIR = "debug_proc"
 PADDING = 20
-PLATE_REGEX = r'^[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{1,4}$'  # Indian plate format
+PLATE_REGEX = r'^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$|^[A-Z]{2}\d{1,4}[A-Z]{1,2}\d{1,4}$' # Indian plate format
 
 # Create debug folders
 os.makedirs(DEBUG_CROPS_DIR, exist_ok=True)
@@ -47,10 +47,13 @@ def preprocess_plate(plate_img, aggressive=False):
     """Return preprocessed image for OCR."""
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
 
-    # Handle low-light images
-    mean_brightness = np.mean(plate_gray)
-    if mean_brightness < 60:  # dark plate
-        plate_gray = cv2.equalizeHist(plate_gray)
+       mean_brightness = np.mean(plate_gray)
+    if mean_brightness < 60:  # very dark plate
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        plate_gray = clahe.apply(plate_gray)
+    elif mean_brightness > 190:  # very bright plate
+        plate_gray = cv2.convertScaleAbs(plate_gray, alpha=0.8, beta=-40)
+
 
     # Resize for better OCR accuracy
     plate_gray = cv2.resize(plate_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
@@ -106,7 +109,7 @@ def preprocess_plate(plate_img, aggressive=False):
 
 def tesseract_ocr(image, psm=8, whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"):
     """Run Tesseract OCR."""
-    config = f"-c tessedit_char_whitelist={whitelist} --psm {psm} --dpi 300"
+    config = f"-c tessedit_char_whitelist={whitelist} --oem 3 --psm {psm}"
     text = pytesseract.image_to_string(image, config=config).strip()
     text = re.sub(r"[^A-Z0-9]", "", text.upper())
     return cleanup_plate_text(text)
@@ -141,8 +144,8 @@ def run_ocr_all(proc_img):
     candidates.append(("EasyOCR", txt_easy, regex_match_score(txt_easy), conf_easy))
 
     # Tesseract loose
-    txt_loose = tesseract_ocr(proc_img, psm=6)
-    candidates.append(("TessLoose", txt_loose, regex_match_score(txt_loose), None))
+        txt_psm7 = tesseract_ocr(proc_img, psm=7)
+    candidates.append(("TessPSM7", txt_psm7, regex_match_score(txt_psm7), None))
 
     # Tesseract strict
     txt_strict = tesseract_ocr(proc_img, psm=8)
@@ -180,7 +183,7 @@ def process_image(img_path):
 
     for det_idx, det in enumerate(detections):
         conf = float(det.conf)
-        if conf < 0.4:
+        if conf < 0.25:
             continue
 
         x1, y1, x2, y2 = map(int, det.xyxy[0])
@@ -201,13 +204,15 @@ def process_image(img_path):
 
         # If regex score is poor, run aggressive mode
         if best_light[2] < 3:
-            proc_img = preprocess_plate(plate_crop, aggressive=True)
-            proc_name = f"{img_name}_plate{det_idx+1}_agg.png"
-            cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
-            aggressive_candidates = run_ocr_all(proc_img)
-            all_candidates = light_candidates + aggressive_candidates
-        else:
-            all_candidates = light_candidates
+                    proc_img_light = preprocess_plate(plate_crop, aggressive=False)
+        light_candidates = run_ocr_all(proc_img_light)
+
+        proc_img_agg = preprocess_plate(plate_crop, aggressive=True)
+        aggressive_candidates = run_ocr_all(proc_img_agg)
+
+        all_candidates = light_candidates + aggressive_candidates
+        best_candidate = pick_best(all_candidates)
+
 
         # Pick best candidate overall
         best_candidate = pick_best(all_candidates)
