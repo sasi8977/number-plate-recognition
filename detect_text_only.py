@@ -145,14 +145,19 @@ def run_ocr_all(proc_img):
     candidates.append(("EasyOCR", txt_easy, regex_match_score(txt_easy), conf_easy))
 
     # Tesseract loose
-        txt_psm7 = tesseract_ocr(proc_img, psm=7)
-    candidates.append(("TessPSM7", txt_psm7, regex_match_score(txt_psm7), None))
+    txt_loose = tesseract_ocr(proc_img, psm=6)
+    candidates.append(("TessLoose", txt_loose, regex_match_score(txt_loose), None))
 
     # Tesseract strict
     txt_strict = tesseract_ocr(proc_img, psm=8)
     candidates.append(("TessStrict", txt_strict, regex_match_score(txt_strict), None))
 
+    # Tesseract PSM7 (single line mode)
+    txt_psm7 = tesseract_ocr(proc_img, psm=7)
+    candidates.append(("TessPSM7", txt_psm7, regex_match_score(txt_psm7), None))
+
     return candidates
+
 
 
 def pick_best(candidates):
