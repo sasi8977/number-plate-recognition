@@ -42,12 +42,13 @@ def cleanup_plate_text(text):
         cleaned += corrections.get(ch, ch)
     return cleaned
 
-
 def preprocess_plate(plate_img, aggressive=False):
     """Return preprocessed image for OCR."""
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
 
-       mean_brightness = np.mean(plate_gray)
+    # Handle low-light images
+    mean_brightness = np.mean(plate_gray)
+
     if mean_brightness < 60:  # very dark plate
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         plate_gray = clahe.apply(plate_gray)
