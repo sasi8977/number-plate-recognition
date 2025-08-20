@@ -33,10 +33,13 @@ reader = easyocr.Reader(['en'])
 def cleanup_plate_text(text):
     """Fix common OCR mistakes like O/0, I/1."""
     corrections = {
-        '0O': '0', 'O0': '0', 'O': '0',
-        'I': '1', 'L': '1', 'Z': '2',
-        'S': '5', 'B': '8'
-    }
+    'O': '0', 'Q': '0',
+    'I': '1', 'L': '1', '|': '1',
+    'Z': '2',
+    'S': '5',
+    'B': '8',
+    'G': '6'
+}
     cleaned = ""
     for ch in text:
         cleaned += corrections.get(ch, ch)
@@ -47,13 +50,13 @@ def preprocess_plate(plate_img, aggressive=False):
     plate_gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
 
     # Handle low-light images
-    mean_brightness = np.mean(plate_gray)
-
+        mean_brightness = np.mean(plate_gray)
     if mean_brightness < 60:  # very dark plate
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         plate_gray = clahe.apply(plate_gray)
     elif mean_brightness > 190:  # very bright plate
-        plate_gray = cv2.convertScaleAbs(plate_gray, alpha=0.8, beta=-40)
+        plate_gray = cv2.convertScaleAbs(plate_gray, alpha=0.7, beta=-50)
+
 
 
     # Resize for better OCR accuracy
