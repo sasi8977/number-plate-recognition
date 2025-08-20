@@ -199,25 +199,22 @@ def process_image(img_path):
         plate_crop = img[y1:y2, x1:x2]
         crop_name = f"{img_name}_plate{det_idx+1}.png"
         cv2.imwrite(os.path.join(DEBUG_CROPS_DIR, crop_name), plate_crop)
-
-        # First pass: light preprocessing
-        proc_img = preprocess_plate(plate_crop, aggressive=False)
-        proc_name = f"{img_name}_plate{det_idx+1}_light.png"
-        cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name), proc_img)
-
-        light_candidates = run_ocr_all(proc_img)
-        best_light = pick_best(light_candidates)
-
-        # If regex score is poor, run aggressive mode
-        if best_light[2] < 3:
-                    proc_img_light = preprocess_plate(plate_crop, aggressive=False)
+        
+        # --- Always run both light & aggressive preprocessing ---
+        proc_img_light = preprocess_plate(plate_crop, aggressive=False)
+        proc_name_light = f"{img_name}_plate{det_idx+1}_light.png"
+        cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name_light), proc_img_light)
         light_candidates = run_ocr_all(proc_img_light)
 
         proc_img_agg = preprocess_plate(plate_crop, aggressive=True)
+        proc_name_agg = f"{img_name}_plate{det_idx+1}_agg.png"
+        cv2.imwrite(os.path.join(DEBUG_PROC_DIR, proc_name_agg), proc_img_agg)
         aggressive_candidates = run_ocr_all(proc_img_agg)
 
+        # Merge candidates & pick best
         all_candidates = light_candidates + aggressive_candidates
         best_candidate = pick_best(all_candidates)
+
 
 
         # Pick best candidate overall
